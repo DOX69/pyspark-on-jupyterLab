@@ -37,6 +37,11 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 6. Autoloads the SparkMonitor and SparkSQL kernel extensions in IPython.
 7. Generates local wrappers `start-jupyter-lab.cmd` and `test-pyspark.cmd`.
 
+The setup pins JupyterLab 4-compatible widget packages and installs
+`jupyterlab-sparksql==1.1.0` with `--no-deps`. `pip check` can therefore report
+the package's older widget pins as conflicts even though the SparkSQL magic is
+configured for this JupyterLab 4 workspace.
+
 ---
 
 ## Usage

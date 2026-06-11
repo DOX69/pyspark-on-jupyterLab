@@ -32,6 +32,15 @@ jobs:
           Set-ExecutionPolicy Bypass -Scope Process -Force
           .\setup.ps1 -ForceSparkReplace
 
+      - name: Verify Virtual Environment
+        shell: powershell
+        run: |
+          if (-not (Test-Path -LiteralPath ".\.venv\Scripts\python.exe")) {
+            throw "Missing virtual environment Python after setup."
+          }
+          .\.venv\Scripts\python.exe --version
+          .\.venv\Scripts\python.exe -m pip --version
+
       - name: Verify PySpark
         shell: cmd
         run: |
