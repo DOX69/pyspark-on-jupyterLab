@@ -24,8 +24,13 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            head="${{ github.sha }}"
+            if [ "${{ github.event.action }}" = "synchronize" ] && [ -n "${{ github.event.before }}" ]; then
+              base="${{ github.event.before }}"
+              head="${{ github.event.after }}"
+            else
+              base="${{ github.event.pull_request.base.sha }}"
+              head="${{ github.sha }}"
+            fi
           else
             base="${{ github.event.before }}"
             head="${{ github.sha }}"
