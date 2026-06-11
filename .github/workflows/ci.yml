@@ -7,9 +7,47 @@ on:
     branches: [ main, master ]
 
 jobs:
+  detect_ci_changes:
+    name: Detect CI-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_windows_ci: ${{ steps.changed_files.outputs.run_windows_ci }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed files
+        id: changed_files
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if [ "${{ github.event.action }}" = "synchronize" ] && [ -n "${{ github.event.before }}" ]; then
+              base="${{ github.event.before }}"
+              head="${{ github.event.after }}"
+            else
+              base="${{ github.event.pull_request.base.sha }}"
+              head="${{ github.sha }}"
+            fi
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          changed_files="$(git diff --name-only "$base" "$head")"
+          if [ -z "$changed_files" ] || echo "$changed_files" | grep -qv '^apache-spark/'; then
+            echo "run_windows_ci=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_windows_ci=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-test:
     name: Build & Test on Windows
     runs-on: windows-latest
+    needs: detect_ci_changes
+    if: needs.detect_ci_changes.outputs.run_windows_ci == 'true'
 
     steps:
       - name: Checkout Code
@@ -31,6 +69,15 @@ jobs:
         run: |
           Set-ExecutionPolicy Bypass -Scope Process -Force
           .\setup.ps1 -ForceSparkReplace
+
+      - name: Verify Virtual Environment
+        shell: powershell
+        run: |
+          if (-not (Test-Path -LiteralPath ".\.venv\Scripts\python.exe")) {
+            throw "Missing virtual environment Python after setup."
+          }
+          .\.venv\Scripts\python.exe --version
+          .\.venv\Scripts\python.exe -m pip --version
 
       - name: Verify PySpark
         shell: cmd

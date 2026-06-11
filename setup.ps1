@@ -9,6 +9,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$WinutilsSha256 = "496A591EB1E67DF2A620F710D529BA6DDFE1C19149E6647CC4E320BB0EFD8553"
+$HadoopDllSha256 = "D7AB36A68518748CEF142BE2DA5069B4C763C2CD764C1D2E6AC48C7200405BE3"
+
 function Write-Step($Message) {
     Write-Host ""
     Write-Host "=========================================================="
@@ -16,15 +19,60 @@ function Write-Step($Message) {
     Write-Host "=========================================================="
 }
 
+function Invoke-NativeCommand($FilePath, [string[]]$Arguments, $FailureMessage) {
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FailureMessage (exit code $LASTEXITCODE)"
+    }
+}
+
+function Test-FileSha256($Path, $ExpectedHash) {
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+    if ($actual -ne $ExpectedHash.ToUpperInvariant()) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw "SHA-256 mismatch for $Path. Expected $ExpectedHash but got $actual."
+    }
+}
+
+function Save-VerifiedDownload($Url, $OutFile, $ExpectedSha256) {
+    Invoke-NativeCommand "curl.exe" @("-L", "--fail", "--output", $OutFile, $Url) "Failed to download $Url"
+    Test-FileSha256 $OutFile $ExpectedSha256
+}
+
 $Workspace = $PSScriptRoot
 $venvDir = Join-Path $Workspace ".venv"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
+$skillInstaller = Join-Path $Workspace ".agent\skills\install-spark-jupyterlab\scripts\install-spark-jupyterlab.ps1"
 
 # 1. Check Python installation
 Write-Step "Checking Python installation"
 $pythonPath = Get-Command "python.exe" -ErrorAction SilentlyContinue
 if (-not $pythonPath) {
     throw "Python is not installed or not in system PATH. Please install Python 3.10 or 3.11."
+}
+
+if (-not (Test-Path -LiteralPath $skillInstaller)) {
+    throw "Skill installer not found at $skillInstaller. Please ensure the .agent/skills/install-spark-jupyterlab folder is present."
+}
+
+$installerArgs = @{
+    SparkVersion = $SparkVersion
+    SparkHome = $SparkHome
+    HadoopHome = $HadoopHome
+    Workspace = $Workspace
+}
+if ($ForceSparkReplace) { $installerArgs["ForceSparkReplace"] = $true }
+
+if ($CheckOnly) {
+    Write-Step "Running non-mutating prerequisite checks"
+    $installerArgs["CheckOnly"] = $true
+    try {
+        & $skillInstaller @installerArgs
+    } catch {
+        throw "Spark installer prerequisite check failed: $($_.Exception.Message)"
+    }
+    Write-Host "CheckOnly complete. Exiting."
+    exit 0
 }
 
 # 2. Handle Hadoop Helper Binaries (winutils.exe, hadoop.dll)
@@ -43,11 +91,8 @@ if (-not (Test-Path -LiteralPath $winutils) -or -not (Test-Path -LiteralPath $ha
     $winutilsUrl = "https://raw.githubusercontent.com/cdarlint/winutils/master/hadoop-3.3.6/bin/winutils.exe"
     $hadoopDllUrl = "https://raw.githubusercontent.com/cdarlint/winutils/master/hadoop-3.3.6/bin/hadoop.dll"
     
-    curl.exe -L --fail --output $winutils $winutilsUrl
-    if ($LASTEXITCODE -ne 0) { throw "Failed to download winutils.exe" }
-    
-    curl.exe -L --fail --output $hadoopDll $hadoopDllUrl
-    if ($LASTEXITCODE -ne 0) { throw "Failed to download hadoop.dll" }
+    Save-VerifiedDownload $winutilsUrl $winutils $WinutilsSha256
+    Save-VerifiedDownload $hadoopDllUrl $hadoopDll $HadoopDllSha256
     
     Write-Host "Hadoop helper binaries successfully downloaded to $hadoopBin"
 } else {
@@ -56,43 +101,19 @@ if (-not (Test-Path -LiteralPath $winutils) -or -not (Test-Path -LiteralPath $ha
 
 # 3. Run the skill installer script to bootstrap Spark, Java, and env variables
 Write-Step "Running Spark and environment installer script"
-$skillInstaller = Join-Path $Workspace ".agent\skills\install-spark-jupyterlab\scripts\install-spark-jupyterlab.ps1"
-if (-not (Test-Path -LiteralPath $skillInstaller)) {
-    throw "Skill installer not found at $skillInstaller. Please ensure the .agent/skills/install-spark-jupyterlab folder is present."
-}
-
-$installerArgs = @{
-    SparkVersion = $SparkVersion
-    SparkHome = $SparkHome
-    HadoopHome = $HadoopHome
-    Workspace = $Workspace
-}
-if ($ForceSparkReplace) { $installerArgs["ForceSparkReplace"] = $true }
-if ($CheckOnly) { $installerArgs["CheckOnly"] = $true }
-
-& $skillInstaller @installerArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Spark installer script failed."
-}
-
-if ($CheckOnly) {
-    Write-Host "CheckOnly complete. Exiting."
-    exit 0
+try {
+    & $skillInstaller @installerArgs
+} catch {
+    throw "Spark installer script failed: $($_.Exception.Message)"
 }
 
 # 4. Install requirements from requirements.txt to configure Jupyter extensions
 Write-Step "Installing Python dependencies from requirements.txt"
-& $venvPython -m pip install -r (Join-Path $Workspace "requirements.txt")
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to install Python requirements."
-}
+Invoke-NativeCommand $venvPython @("-m", "pip", "install", "-r", (Join-Path $Workspace "requirements.txt")) "Failed to install Python requirements"
 
 # 4b. Install jupyterlab-sparksql with --no-deps to bypass conflicting pins
 Write-Step "Installing jupyterlab-sparksql with --no-deps"
-& $venvPython -m pip install --no-deps jupyterlab-sparksql
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to install jupyterlab-sparksql."
-}
+Invoke-NativeCommand $venvPython @("-m", "pip", "install", "--no-deps", "jupyterlab-sparksql==1.1.0") "Failed to install jupyterlab-sparksql"
 
 # 5. Configure IPython kernel extensions for SparkMonitor and SparkSQL
 Write-Step "Configuring IPython kernel extensions for SparkMonitor and SparkSQL"

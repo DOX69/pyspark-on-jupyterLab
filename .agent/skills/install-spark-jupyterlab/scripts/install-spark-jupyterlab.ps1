@@ -32,23 +32,50 @@ function Get-JavaMajorVersion {
 }
 
 function Get-PythonLauncher {
+  if ($env:pythonLocation) {
+    $pythonFromAction = Join-Path $env:pythonLocation "python.exe"
+    if (Test-PythonVersion $pythonFromAction @()) {
+      return @{ Command = $pythonFromAction; Args = @() }
+    }
+  }
+
+  $python = Get-CommandPath "python.exe"
+  if ($python -and (Test-PythonVersion $python @())) {
+    return @{ Command = $python; Args = @() }
+  }
+
   $candidates = @("3.11", "3.10")
   foreach ($version in $candidates) {
-    try {
-      & py "-$version" --version *> $null
-      if ($LASTEXITCODE -eq 0) { return @{ Command = "py"; Args = @("-$version") } }
-    } catch {}
+    if (Test-PythonVersion "py" @("-$version")) {
+      return @{ Command = "py"; Args = @("-$version") }
+    }
   }
-  $python = Get-CommandPath "python.exe"
-  if ($python) {
-    $versionText = (& python --version 2>&1 | Out-String)
-    if ($versionText -match 'Python\s+3\.(10|11)\.') { return @{ Command = "python"; Args = @() } }
-  }
+
   return $null
 }
 
-function Invoke-Python($Launcher, [string[]]$Args) {
-  & $Launcher.Command @($Launcher.Args + $Args)
+function Test-PythonVersion($Command, [string[]]$PythonArgs) {
+  try {
+    $versionText = (& $Command @($PythonArgs + @("--version")) 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $versionText -notmatch 'Python\s+3\.(10|11)\.') { return $false }
+    & $Command @($PythonArgs + @("-c", "import ensurepip, venv")) *> $null
+    if ($LASTEXITCODE -eq 0) { return $true }
+  } catch {}
+  return $false
+}
+
+function Invoke-NativeCommand($FilePath, [string[]]$Arguments, $FailureMessage) {
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$FailureMessage (exit code $LASTEXITCODE)"
+  }
+}
+
+function Invoke-Python($Launcher, [string[]]$PythonArgs, $FailureMessage) {
+  & $Launcher.Command @($Launcher.Args + $PythonArgs)
+  if ($LASTEXITCODE -ne 0) {
+    throw "$FailureMessage (exit code $LASTEXITCODE)"
+  }
 }
 
 function Ensure-Directory($Path) {
@@ -75,8 +102,7 @@ function Add-UserPathEntry($Entry) {
 
 function Download-File($Url, $OutFile) {
   Ensure-Directory (Split-Path -Parent $OutFile)
-  curl.exe -L --fail --output $OutFile $Url
-  if ($LASTEXITCODE -ne 0) { throw "Download failed: $Url" }
+  Invoke-NativeCommand "curl.exe" @("-L", "--fail", "--output", $OutFile, $Url) "Download failed: $Url"
 }
 
 function Verify-Sha512($File, $ShaUrl) {
@@ -171,7 +197,7 @@ if (-not (Test-Path -LiteralPath $SparkHome)) {
   $shaUrl = "https://downloads.apache.org/spark/spark-$SparkVersion/spark-$SparkVersion-bin-hadoop3.tgz.sha512"
   Download-File $baseUrl $archive
   Verify-Sha512 $archive $shaUrl
-  tar -xzf $archive -C $extractRoot
+  Invoke-NativeCommand "tar" @("-xzf", $archive, "-C", $extractRoot) "Failed to extract Apache Spark archive"
   Move-Item -LiteralPath (Join-Path $extractRoot "spark-$SparkVersion-bin-hadoop3") -Destination $SparkHome
 }
 
@@ -199,10 +225,13 @@ Write-Step "Creating JupyterLab workspace"
 Ensure-Directory $Workspace
 $venvPython = Join-Path $Workspace ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $venvPython)) {
-  Invoke-Python $pythonLauncher @("-m", "venv", (Join-Path $Workspace ".venv"))
+  Invoke-Python $pythonLauncher @("-m", "venv", (Join-Path $Workspace ".venv")) "Failed to create Python virtual environment"
 }
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install "jupyterlab" "pyspark==$SparkVersion"
+if (-not (Test-Path -LiteralPath $venvPython)) {
+  throw "Python virtual environment was not created at $venvPython"
+}
+Invoke-NativeCommand $venvPython @("-m", "pip", "install", "--upgrade", "pip") "Failed to upgrade pip"
+Invoke-NativeCommand $venvPython @("-m", "pip", "install", "jupyterlab==4.5.8", "pyspark==$SparkVersion") "Failed to install base JupyterLab and PySpark packages"
 
 $python3 = Join-Path $Workspace ".venv\Scripts\python3.exe"
 if (-not (Test-Path -LiteralPath $python3)) {
@@ -239,9 +268,9 @@ cd /d "%~dp0"
 "@ | Set-Content -LiteralPath $testScript -Encoding ASCII
 
 Write-Step "Verifying installation"
-& (Join-Path $SparkHome "bin\spark-submit.cmd") --version
-& $venvPython -c "import pyspark; print(pyspark.__version__)"
-& $testScript
+Invoke-NativeCommand (Join-Path $SparkHome "bin\spark-submit.cmd") @("--version") "spark-submit verification failed"
+Invoke-NativeCommand $venvPython @("-c", "import pyspark; print(pyspark.__version__)") "PySpark import verification failed"
+Invoke-NativeCommand $testScript @() "Generated PySpark smoke test failed"
 
 Write-Host ""
 Write-Host "Install complete."
