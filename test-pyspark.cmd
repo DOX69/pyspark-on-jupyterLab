@@ -1,0 +1,10 @@
+@echo off
+set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.3.9-hotspot\"
+set "SPARK_HOME=C:\spark"
+set "HADOOP_HOME=C:\hadoop"
+set "SPARK_LOCAL_HOSTNAME=localhost"
+set "PYSPARK_PYTHON=%~dp0.venv\Scripts\python.exe"
+set "PYSPARK_DRIVER_PYTHON=%~dp0.venv\Scripts\python.exe"
+set "PATH=%JAVA_HOME%\bin;%SPARK_HOME%\bin;%HADOOP_HOME%\bin;%PATH%"
+cd /d "%~dp0"
+"%~dp0.venv\Scripts\python.exe" -c "from pyspark.sql import SparkSession; spark = SparkSession.builder.appName('PySpark-Get-Started').getOrCreate(); df = spark.createDataFrame([('Alice', 25), ('Bob', 30)], ['Name', 'Age']); df.show(); print('SPARK_VERSION', spark.version); spark.stop()"

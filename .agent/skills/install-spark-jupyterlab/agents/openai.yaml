@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Spark JupyterLab"
+  short_description: "Set up and debug Spark/JupyterLab on Windows"
+  default_prompt: "Use $install-spark-jupyterlab to install Apache Spark 4 locally with JupyterLab on Windows, or to debug PySpark, SparkMonitor, and jupyterlab-sparksql %%sql magic errors."

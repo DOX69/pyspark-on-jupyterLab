@@ -1,0 +1,8 @@
+jupyterlab
+pyspark==4.1.2
+sparkmonitor
+ipywidgets==8.1.8
+jupyterlab_widgets==3.0.16
+pandas
+plotly
+pywinpty
