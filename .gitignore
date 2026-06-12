@@ -1,5 +1,3 @@
 .venv/
 .ipynb_checkpoints/
 *.log
-start-jupyter-lab.cmd
-test-pyspark.cmd
